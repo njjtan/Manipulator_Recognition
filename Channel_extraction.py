@@ -1,29 +1,28 @@
+# roi_processor.py
 import cv2
-# 读取ROI
-img = cv2.imread("test.png")
+import numpy as np
+def process_roi(roi_image, channel='r'):
+    """
+    处理 ROI 区域，提取指定通道并转为灰度图像
+    参数:
+        roi_image: ROI 区域的图像 (numpy 数组)
+        channel: 通道选择，'r'、'g' 或 'b'
+    返回:
+        processed_image: 处理后的图像 (numpy 数组)
+    """
+    # 分离通道
+    b, g, r = cv2.split(roi_image)
 
-# 分离通道
-b, g, r = cv2.split(img)
+    # 根据选择的通道返回灰度图像
+    if channel == 'r':
+        gray = r
+    elif channel == 'g':
+        gray = g
+    elif channel == 'b':
+        gray = b
+    else:
+        gray = r  # 默认红色通道
 
-# 创建全零矩阵，用于置零不需要的通道
-zeros = np.zeros_like(b)
-
-# 只保留R通道
-r_only = cv2.merge([zeros, zeros, r])
-
-# 只保留G通道
-g_only = cv2.merge([zeros, g, zeros])
-
-# 只保留B通道
-b_only = cv2.merge([b, zeros, zeros])
-
-# 显示图像
-cv2.imshow("Red Channel", r_only)
-cv2.imshow("Green Channel", g_only)
-cv2.imshow("Blue Channel", b_only)
-
-# 等待按键按下
-cv2.waitKey(0)
-
-# 关闭所有窗口
-cv2.destroyAllWindows()
+    # 将单通道灰度图转回三通道，以便后续显示
+    processed_image = cv2.merge([gray, gray, gray])
+    return processed_image

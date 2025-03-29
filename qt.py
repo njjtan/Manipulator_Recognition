@@ -2,9 +2,10 @@ import sys
 import cv2
 import numpy as np
 from PyQt5.QtWidgets import (QApplication, QWidget, QLabel, QPushButton,
-                             QVBoxLayout, QHBoxLayout, QFileDialog)
+                             QVBoxLayout, QHBoxLayout, QFileDialog,QComboBox)
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen
 from PyQt5.QtCore import Qt, QPoint, QRect
+from Channel_extraction import process_roi  # 导入处理函数
 
 
 class ImageViewer(QWidget):
@@ -16,6 +17,7 @@ class ImageViewer(QWidget):
         self.resizing = False
         self.moving = False
         self.resize_handle = None
+        self.channel_combo = None #下拉菜单
         self.initUI()
 
     def initUI(self):
@@ -32,17 +34,27 @@ class ImageViewer(QWidget):
         btn_save = QPushButton("保存ROI", self)
         btn_save.clicked.connect(self.saveROI)
 
+        btn_process = QPushButton("提取通道",self)
+        btn_process.clicked.connect(self.processROI)
+
+        #添加下拉菜单选择通道
+        self.channel_combo = QComboBox(self)
+        self.channel_combo.addItems(["Red", "Green", "Blue"])
+        #创建一个水平布局（QHBoxLayout），并将多个控件（如按钮和下拉框）添加到这个布局中
         btn_layout = QHBoxLayout()
         btn_layout.addWidget(btn_load)
         btn_layout.addWidget(btn_roi)
         btn_layout.addWidget(btn_save)
+        btn_layout.addWidget(btn_process)
+        btn_layout.addWidget(self.channel_combo)
+
 
         main_layout = QVBoxLayout()
         main_layout.addLayout(btn_layout)
         main_layout.addWidget(self.image_label)
         self.setLayout(main_layout)
 
-        self.setWindowTitle('PyQt5 ROI选择器')
+        self.setWindowTitle('PyQt5')
         self.show()
 
     def loadImage(self):
@@ -251,6 +263,23 @@ class ImageViewer(QWidget):
             if roi.size > 0:
                 cv2.imwrite("roi_result.jpg", roi)
                 print(f"ROI 已保存为 roi_result.jpg，坐标: ({x1},{y1}) - ({x2},{y2})")
+            else:
+                print("错误：选择的区域无效")
+
+    def processROI(self):
+        if self.roi_rect and self.original_image is not None:
+            x1, y1 = self.roi_rect.left(), self.roi_rect.top()
+            x2, y2 = self.roi_rect.right(), self.roi_rect.bottom()
+            roi = self.original_image[y1:y2, x1:x2]
+            if roi.size > 0:
+                # 根据下拉菜单选择通道
+                channel = self.channel_combo.currentText().lower()[0]  # 'r', 'g', 'b'
+                processed_roi = process_roi(roi, channel)
+                # 创建新图像，ROI 区域替换为处理结果
+                new_image = self.original_image.copy()
+                new_image[y1:y2, x1:x2] = processed_roi
+                self.original_image = new_image
+                self.updateDisplay()
             else:
                 print("错误：选择的区域无效")
 
