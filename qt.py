@@ -62,19 +62,26 @@ class ImageViewer(QWidget):
             self, "选择图片", "", "Image Files (*.png *.jpg *.jpeg)")
         if filename:
             self.original_image = cv2.imread(filename)
+            self.display_image = self.original_image.copy()  # 显示用的可修改副本
             if self.original_image is not None:
                 self.roi_rect = None
                 self.updateDisplay()
 
+
     def updateDisplay(self):
-        h, w, ch = self.original_image.shape
+        # 改用display_image而非original_image作为显示源
+        h, w, ch = self.display_image.shape  # 注意这里改为display_image
         bytes_per_line = ch * w
-        image_rgb = cv2.cvtColor(self.original_image, cv2.COLOR_BGR2RGB)
+        # OpenCV默认是BGR格式，需转RGB
+        image_rgb = cv2.cvtColor(self.display_image, cv2.COLOR_BGR2RGB)  # 修改点
         q_img = QImage(image_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
-        self.display_image = QPixmap.fromImage(q_img)
-        pixmap = self.display_image.copy()
+        pixmap = QPixmap.fromImage(q_img)
+
+        # 绘制ROI选框（如果有）
         if self.roi_rect:
-            self.drawROI(pixmap)
+            self.drawROI(pixmap)  # 直接在pixmap上绘制选框
+
+        # 缩放并显示
         scaled_pixmap = pixmap.scaled(
             self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.image_label.setPixmap(scaled_pixmap)
@@ -270,16 +277,16 @@ class ImageViewer(QWidget):
         if self.roi_rect and self.original_image is not None:
             x1, y1 = self.roi_rect.left(), self.roi_rect.top()
             x2, y2 = self.roi_rect.right(), self.roi_rect.bottom()
+            # 始终从原始图像提取ROI
             roi = self.original_image[y1:y2, x1:x2]
             if roi.size > 0:
-                # 根据下拉菜单选择通道
                 channel = self.channel_combo.currentText().lower()[0]  # 'r', 'g', 'b'
                 processed_roi = process_roi(roi, channel)
-                # 创建新图像，ROI 区域替换为处理结果
-                new_image = self.original_image.copy()
+                # 创建新图像基于当前显示图像，替换ROI区域
+                new_image = self.display_image.copy()  # 使用显示图像作为基础
                 new_image[y1:y2, x1:x2] = processed_roi
-                self.original_image = new_image
-                self.updateDisplay()
+                self.display_image = new_image  # 更新显示图像
+                self.updateDisplay()  # 确保这里显示的是display_image
             else:
                 print("错误：选择的区域无效")
 
