@@ -2,12 +2,16 @@ import sys
 import cv2
 import numpy as np
 from PyQt5.QtWidgets import (QApplication, QWidget, QLabel, QPushButton,
-                             QVBoxLayout, QHBoxLayout, QFileDialog,QComboBox,QDialog,
-                             QRadioButton,QSlider,QLineEdit)
+                             QVBoxLayout, QHBoxLayout, QFileDialog, QComboBox, QDialog,
+                             QRadioButton, QSlider, QLineEdit, QSizePolicy)
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen
-from PyQt5.QtCore import Qt, QPoint, QRect
+from PyQt5.QtCore import Qt, QPoint, QRect, QTimer
+
 
 def process_roi(roi_image, channel='r', threshold_type=None, low_thresh=0, high_thresh=33, min_area=3000):
+    # 添加阈值有效性检查
+    if low_thresh > high_thresh:
+        low_thresh, high_thresh = high_thresh, low_thresh
     b, g, r = cv2.split(roi_image)
     if channel == 'r':
         gray = r
@@ -17,27 +21,34 @@ def process_roi(roi_image, channel='r', threshold_type=None, low_thresh=0, high_
         gray = b
     else:
         gray = r
-
     if threshold_type is None:
         processed_image = cv2.merge([gray, gray, gray])
         return processed_image
 
+        # 修改阈值处理逻辑
     if threshold_type == 'auto':
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     else:
-        # 手动二值化：只标记像素值在 low_thresh 到 high_thresh 之间的区域
-        _, binary = cv2.threshold(gray, low_thresh, high_thresh, cv2.THRESH_BINARY)
-        print(f"手动二值化: 低 {low_thresh}, 高 {high_thresh}")
+        # 使用inRange替代threshold实现区间阈值
+        binary = cv2.inRange(gray, low_thresh, high_thresh)
 
+        # 优化连通区域分析
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     processed_image = roi_image.copy()
 
     for contour in contours:
         area = cv2.contourArea(contour)
         if area >= min_area:
-            cv2.drawContours(processed_image, [contour], -1, (0, 255, 0), thickness=2)  # 绿点标记
-            x, y, w, h = cv2.boundingRect(contour)
-            cv2.rectangle(processed_image, (x, y), (x + w, y + h), (0, 255, 0), 2)  # 外接矩形
+            # 绘制旋转矩形（红色）
+            rect = cv2.minAreaRect(contour)
+            box = cv2.boxPoints(rect)
+            box = np.intp(box)
+            cv2.drawContours(processed_image, [box], 0, (0, 0, 255), 2)
+
+            # 填充区域（绿色）
+            mask = np.zeros_like(gray)
+            cv2.drawContours(mask, [contour], -1, 255, -1)
+            processed_image[mask == 255] = [0, 255, 0]
 
     return processed_image
 
@@ -61,7 +72,8 @@ class ImageViewer(QWidget):
     def initUI(self):
         self.image_label = QLabel(self)
         self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setMinimumSize(640, 480)
+        # 去掉 setMinimumSize(640, 480)，让它自由伸缩
+        self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)  # 允许扩展
 
         btn_load = QPushButton("加载图片", self)
         btn_load.clicked.connect(self.loadImage)
@@ -72,13 +84,12 @@ class ImageViewer(QWidget):
         btn_save = QPushButton("保存ROI", self)
         btn_save.clicked.connect(self.saveROI)
 
-        btn_process = QPushButton("提取通道",self)
+        btn_process = QPushButton("提取通道", self)
         btn_process.clicked.connect(self.processROI)
 
-        #添加下拉菜单选择通道
         self.channel_combo = QComboBox(self)
         self.channel_combo.addItems(["Red", "Green", "Blue"])
-        #创建一个水平布局（QHBoxLayout），并将多个控件（如按钮和下拉框）添加到这个布局中
+
         btn_layout = QHBoxLayout()
         btn_layout.addWidget(btn_load)
         btn_layout.addWidget(btn_roi)
@@ -90,52 +101,56 @@ class ImageViewer(QWidget):
         btn_params.clicked.connect(self.showParamsDialog)
         btn_layout.addWidget(btn_params)
 
-
         main_layout = QVBoxLayout()
         main_layout.addLayout(btn_layout)
-        main_layout.addWidget(self.image_label)
+        main_layout.addWidget(self.image_label, stretch=1)  # stretch=1 让图像区域占满剩余空间
         self.setLayout(main_layout)
 
         self.setWindowTitle('PyQt5')
         self.show()
+        self.setMinimumSize(800, 600)
+
+    def forceRefresh(self):
+        if self.roi_rect:
+            self.applyThreshold()
+            self.updateDisplay()
 
     def setThresholdType(self, type):
         self.threshold_type = type
         print(f"设置阈值类型: {type}")
 
-    def setLowThresh(self, value):
-        self.low_thresh = value
-        print(f"设置低阈值: {value}")
-
-    def setHighThresh(self, value):
-        self.high_thresh = value
-        print(f"设置高阈值: {value}")
-
     def setMinArea(self, text):
         try:
             self.min_area = int(text)
             print(f"设置最小面积: {self.min_area}")
+            QTimer.singleShot(500, self.applyThreshold)  # 延迟 500ms
         except ValueError:
             self.min_area = 3000
             print("面积输入无效，使用默认值 3000")
+            QTimer.singleShot(500, self.applyThreshold)
 
     def applyThreshold(self):
-        if self.roi_rect and self.original_image is not None:
+        if self.roi_rect and self.pristine_image is not None:
             print("开始应用阈值...")
             x1, y1 = self.roi_rect.left(), self.roi_rect.top()
             x2, y2 = self.roi_rect.right(), self.roi_rect.bottom()
-            roi = self.original_image[y1:y2, x1:x2]
+            roi = self.pristine_image[y1:y2, x1:x2]  # 从原始图像取 ROI
             if roi.size > 0:
                 channel = self.channel_combo.currentText().lower()[0]
-                processed_roi = process_roi(roi, channel, self.threshold_type,
+                # 先提取通道（保持灰度）
+                gray_roi = process_roi(roi, channel, threshold_type=None)
+                # 再应用阈值处理
+                processed_roi = process_roi(gray_roi, channel, self.threshold_type,
                                             self.low_thresh, self.high_thresh, self.min_area)
-                new_image = self.original_image.copy()
+                new_image = self.pristine_image.copy()  # 从原始图像复制
                 new_image[y1:y2, x1:x2] = processed_roi
                 self.original_image = new_image
                 self.updateDisplay()
                 print("阈值应用完成")
             else:
                 print("错误：选择的区域无效")
+        else:
+            print("无 ROI 或原始图像未加载")
 
     def loadImage(self):
         filename, _ = QFileDialog.getOpenFileName(
@@ -152,6 +167,7 @@ class ImageViewer(QWidget):
         dialog.setWindowTitle("参数设置")
         layout = QVBoxLayout()
 
+        # 单选按钮：自动/手动二值化
         auto_radio = QRadioButton("自动二值化", dialog)
         manual_radio = QRadioButton("手动二值化", dialog)
         auto_radio.setChecked(self.threshold_type == 'auto')
@@ -161,32 +177,65 @@ class ImageViewer(QWidget):
         layout.addWidget(auto_radio)
         layout.addWidget(manual_radio)
 
+        # 低阈值滑条 + 动态标签
+        low_layout = QHBoxLayout()
+        low_label = QLabel("低阈值:", dialog)
         low_slider = QSlider(Qt.Horizontal, dialog)
-        low_slider.setRange(0, 100)  # 保持 0-100，但后面映射到 0-255
+        low_slider.setRange(0, 255)
         low_slider.setValue(self.low_thresh)
-        low_slider.valueChanged.connect(self.setLowThresh)
-        layout.addWidget(QLabel("低阈值:"))
-        layout.addWidget(low_slider)
+        low_value_label = QLabel(f"{self.low_thresh}", dialog)  # 初始值
+        low_value_label.setFixedWidth(30)  # 固定宽度，避免跳动
+        low_slider.valueChanged.connect(lambda value: [self.setLowThresh(value), low_value_label.setText(f"{value}")])
+        low_layout.addWidget(low_label)
+        low_layout.addWidget(low_slider)
+        low_layout.addWidget(low_value_label)
+        layout.addLayout(low_layout)
 
+        # 高阈值滑条 + 动态标签
+        high_layout = QHBoxLayout()
+        high_label = QLabel("高阈值:", dialog)
         high_slider = QSlider(Qt.Horizontal, dialog)
-        high_slider.setRange(0, 300)  # 示例要 0-300
+        high_slider.setRange(0, 255)
         high_slider.setValue(self.high_thresh)
-        high_slider.valueChanged.connect(self.setHighThresh)
-        layout.addWidget(QLabel("高阈值:"))
-        layout.addWidget(high_slider)
+        high_value_label = QLabel(f"{self.high_thresh}", dialog)  # 初始值
+        high_value_label.setFixedWidth(30)  # 固定宽度，避免跳动
+        high_slider.valueChanged.connect(
+            lambda value: [self.setHighThresh(value), high_value_label.setText(f"{value}")])
+        high_layout.addWidget(high_label)
+        high_layout.addWidget(high_slider)
+        high_layout.addWidget(high_value_label)
+        layout.addLayout(high_layout)
 
+        # 最小面积输入框
+        area_layout = QHBoxLayout()
+        area_label = QLabel("最小面积:", dialog)
         area_input = QLineEdit(str(self.min_area), dialog)
-        area_input.textChanged.connect(self.setMinArea)
-        layout.addWidget(QLabel("最小面积:"))
-        layout.addWidget(area_input)
+        area_input.textChanged.connect(self.setMinArea)  # 实时更新
+        area_layout.addWidget(area_label)
+        area_layout.addWidget(area_input)
+        layout.addLayout(area_layout)
 
+        # 确定按钮
         ok_btn = QPushButton("确定", dialog)
-        ok_btn.clicked.connect(lambda checked: [dialog.accept(), self.applyThreshold()])
+        ok_btn.clicked.connect(lambda: [self.applyThreshold(), dialog.accept()])  # 先应用再关闭
         layout.addWidget(ok_btn)
 
         dialog.setLayout(layout)
-        print("对话框初始化完成")
         dialog.exec_()
+
+    def setLowThresh(self, value):
+        self.low_thresh = min(int(value), 255)
+        if self.low_thresh > self.high_thresh:
+            self.low_thresh = self.high_thresh
+        # print(f"设置低阈值: {self.low_thresh}")  # 去掉终端输出，靠界面显示
+        self.applyThreshold()  # 实时应用
+
+    def setHighThresh(self, value):
+        self.high_thresh = min(int(value), 255)
+        if self.high_thresh < self.low_thresh:
+            self.high_thresh = self.low_thresh
+        # print(f"设置高阈值: {self.high_thresh}")  # 去掉终端输出，靠界面显示
+        self.applyThreshold()  # 实时应用
 
     def onAutoToggled(self, checked):
         if checked:
@@ -203,18 +252,21 @@ class ImageViewer(QWidget):
     def updateDisplay(self):
         if self.original_image is None:
             return
-        h, w, ch = self.original_image.shape  # 用 original_image
+        h, w, ch = self.original_image.shape
         bytes_per_line = ch * w
-        image_rgb = cv2.cvtColor(self.original_image, cv2.COLOR_BGR2RGB)  # 从 original_image 转换
+        image_rgb = cv2.cvtColor(self.original_image, cv2.COLOR_BGR2RGB)
         q_img = QImage(image_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
-        self.display_image = QPixmap.fromImage(q_img)  # 生成 QPixmap
+        self.display_image = QPixmap.fromImage(q_img)
+
         pixmap = self.display_image.copy()
         if self.roi_rect:
-            self.drawROI(pixmap)  # 绘制 ROI 框
+            self.drawROI(pixmap)
+
+        # 动态缩放到 image_label 的大小
         scaled_pixmap = pixmap.scaled(
             self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.image_label.setPixmap(scaled_pixmap)
-        self.image_label.update()  # 确保刷新
+        self.image_label.update()
 
     def createROI(self):
         if self.original_image is not None:
@@ -410,11 +462,12 @@ class ImageViewer(QWidget):
             roi = self.pristine_image[y1:y2, x1:x2]  # 从原始图像取 ROI
             if roi.size > 0:
                 channel = self.channel_combo.currentText().lower()[0]
-                processed_roi = process_roi(roi, channel, threshold_type=None)
+                processed_roi = process_roi(roi, channel, threshold_type=None)  # 只提取通道
                 new_image = self.pristine_image.copy()  # 从原始图像复制
-                new_image[y1:y2, x1:x2] = processed_roi
-                self.original_image = new_image  # 更新当前图像
+                new_image[y1:y2, x1:x2] = processed_roi  # ROI 区域变灰
+                self.original_image = new_image  # 更新为灰度效果
                 self.updateDisplay()
+                print("通道提取完成，ROI 区域已变灰")
             else:
                 print("错误：选择的区域无效")
 
