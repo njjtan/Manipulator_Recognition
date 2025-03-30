@@ -8,7 +8,8 @@ from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen
 from PyQt5.QtCore import Qt, QPoint, QRect, QTimer
 
 
-def process_roi(roi_image, channel='r', threshold_type=None, low_thresh=0, high_thresh=33, min_area=3000, offset=(0, 0)):
+def process_roi(roi_image, channel='r', threshold_type=None, low_thresh=0, high_thresh=33, min_area=3000,
+                offset=(0, 0)):
     if low_thresh > high_thresh:
         low_thresh, high_thresh = high_thresh, low_thresh
     b, g, r = cv2.split(roi_image)
@@ -32,9 +33,10 @@ def process_roi(roi_image, channel='r', threshold_type=None, low_thresh=0, high_
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     processed_image = roi_image.copy()
     rect_info = []
-    x_offset, y_offset = offset  # ROI 偏移量
+    x_offset, y_offset = offset
+    idx = 1  # 编号从 1 开始
 
-    for idx, contour in enumerate(contours, 1):  # 从 1 开始编号
+    for contour in contours:
         area = cv2.contourArea(contour)
         if area >= min_area:
             rect = cv2.minAreaRect(contour)
@@ -42,11 +44,10 @@ def process_roi(roi_image, channel='r', threshold_type=None, low_thresh=0, high_
             box = np.intp(box)
 
             # 计算中心点和方向
-            center = rect[0]  # (center_x, center_y)
-            # 加上 ROI 偏移量，转换为全局坐标
-            center = (center[0] + x_offset, center[1] + y_offset)
+            center = rect[0]
+            global_center = (center[0] + x_offset, center[1] + y_offset)
             angle = rect[2]
-            rect_info.append((idx, center, angle))
+            rect_info.append((idx, global_center, angle))
 
             # 绘制矩形（红色）
             cv2.drawContours(processed_image, [box], 0, (0, 0, 255), 2)
@@ -56,13 +57,30 @@ def process_roi(roi_image, channel='r', threshold_type=None, low_thresh=0, high_
             cv2.drawContours(mask, [contour], -1, 255, -1)
             processed_image[mask == 255] = [0, 255, 0]
 
-            # 在矩形中心绘制编号（红色字体）
+            # 在矩形中心绘制红色圆点标记
+            local_center = (int(center[0]), int(center[1]))  # ROI 局部坐标
+            cv2.circle(processed_image, local_center, 5, (255, 0, 0), -1)  # 蓝色圆点
+
+            # 绘制编号和坐标文本（红色字体）
             font = cv2.FONT_HERSHEY_SIMPLEX
-            text = str(idx)
-            text_size = cv2.getTextSize(text, font, 1, 2)[0]
-            text_x = int(center[0] - x_offset - text_size[0] / 2)  # 局部坐标
-            text_y = int(center[1] - y_offset + text_size[1] / 2)
-            cv2.putText(processed_image, text, (text_x, text_y), font, 1, (255, 0, 0), 2)
+            text_id = f"ID: {idx}"
+            text_coord = f"({global_center[0]:.1f}, {global_center[1]:.1f})"
+
+            # 计算文本位置（编号在上，坐标在下）
+            (text_width, text_height), _ = cv2.getTextSize(text_id, font, 0.6, 2)
+            text_x = local_center[0] - text_width // 2
+            text_y_id = local_center[1] - text_height - 5  # 编号在圆点上方
+            text_y_coord = local_center[1] + text_height + 10  # 坐标在圆点下方
+
+            # 绘制编号
+            cv2.putText(processed_image, text_id, (text_x, text_y_id),
+                        font, 0.6, (0, 0, 255), 2)
+
+            # 绘制坐标
+            cv2.putText(processed_image, text_coord, (text_x, text_y_coord),
+                        font, 0.6, (0, 0, 255), 2)
+
+            idx += 1
 
     return processed_image, rect_info
 
