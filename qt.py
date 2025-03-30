@@ -507,7 +507,7 @@ class ImageViewer(QWidget):
             # self.getImagePosition 将其转换为图像坐标系中的坐标。
             pos = self.getImagePosition(event.pos())
             #定义调整大小的“手柄”（handle）的大小。这里设置为 16像素，表示每个角落的可点击区域是一个 16x16 的正方形。
-            handle_size = 16
+            handle_size = 25
             #检查鼠标是否点击了 ROI 矩形的 左上角。
             # 如果点击了左上角附近 16x16 的区域，则设置 resizing = True 和 resize_handle = "topLeft"。
             if QRect(self.roi_rect.topLeft().x() - handle_size // 2,
