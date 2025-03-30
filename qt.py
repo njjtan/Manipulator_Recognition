@@ -2,12 +2,87 @@ import sys
 import cv2
 import numpy as np
 from PyQt5.QtWidgets import (QApplication, QWidget, QLabel, QPushButton,
-                             QVBoxLayout, QHBoxLayout, QFileDialog,QComboBox)
+                             QVBoxLayout, QHBoxLayout, QFileDialog,QComboBox,QDialog,
+                             QRadioButton,QSlider,QLineEdit)
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen
 from PyQt5.QtCore import Qt, QPoint, QRect
-from Channel_extraction import process_roi  # 导入处理函数
 
+def process_roi(roi_image, channel='r'):
+    """
+    处理 ROI 区域，提取指定通道并转为灰度图像
+    参数:
+        roi_image: ROI 区域的图像 (numpy 数组)
+        channel: 通道选择，'r'、'g' 或 'b'
+    返回:
+        processed_image: 处理后的图像 (numpy 数组)
+    """
+    # 分离通道
+    b, g, r = cv2.split(roi_image)
 
+    # 根据选择的通道返回灰度图像
+    if channel == 'r':
+        gray = r
+    elif channel == 'g':
+        gray = g
+    elif channel == 'b':
+        gray = b
+    else:
+        gray = r  # 默认红色通道
+
+    # 将单通道灰度图转回三通道，以便后续显示
+    processed_image = cv2.merge([gray, gray, gray])
+    return processed_image
+
+class ThresholdDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("阈值处理设置")
+
+        layout = QVBoxLayout()
+
+        # 二值化方式选择
+        self.auto_radio = QRadioButton("自动二值化(Otsu)")
+        self.manual_radio = QRadioButton("手动二值化")
+        self.manual_radio.setChecked(True)
+        layout.addWidget(QLabel("选择二值化方式:"))
+        layout.addWidget(self.auto_radio)
+        layout.addWidget(self.manual_radio)
+
+        # 手动阈值滑动条
+        self.threshold_layout = QVBoxLayout()
+        self.low_slider = QSlider(Qt.Horizontal)
+        self.low_slider.setRange(0, 100)
+        self.high_slider = QSlider(Qt.Horizontal)
+        self.high_slider.setRange(0, 100)
+        self.high_slider.setValue(100)
+        self.threshold_layout.addWidget(QLabel("低阈值 (0-100):"))
+        self.threshold_layout.addWidget(self.low_slider)
+        self.threshold_layout.addWidget(QLabel("高阈值 (0-100):"))
+        self.threshold_layout.addWidget(self.high_slider)
+        layout.addLayout(self.threshold_layout)
+
+        # 自动阈值时隐藏滑动条
+        self.auto_radio.toggled.connect(lambda: self.threshold_layout.setVisible(not self.auto_radio.isChecked()))
+
+        # 面积筛选输入
+        layout.addWidget(QLabel("面积筛选阈值:"))
+        self.area_input = QLineEdit("3000")
+        layout.addWidget(self.area_input)
+
+        # 确定按钮
+        self.ok_btn = QPushButton("确定")
+        self.ok_btn.clicked.connect(self.accept)
+        layout.addWidget(self.ok_btn)
+
+        self.setLayout(layout)
+
+    def get_params(self):
+        return {
+            "is_auto": self.auto_radio.isChecked(),
+            "low_thresh": self.low_slider.value(),
+            "high_thresh": self.high_slider.value(),
+            "min_area": int(self.area_input.text())
+        }
 class ImageViewer(QWidget):
     def __init__(self):
         super().__init__()
@@ -126,7 +201,7 @@ class ImageViewer(QWidget):
         painter.drawRect(self.roi_rect)
 
         # 绘制调整大小的控制点
-        handle_size = 12
+        handle_size = 16
         painter.setPen(Qt.NoPen)  # 移除边框线
         painter.setBrush(Qt.red)  # 设置填充颜色为红色
 
@@ -259,16 +334,18 @@ class ImageViewer(QWidget):
         if event.button() == Qt.LeftButton:
             self.resizing = False
             self.moving = False
-            print(f"ROI 坐标: 左上角 ({self.roi_rect.left()}, {self.roi_rect.top()}), "
-                  f"右下角 ({self.roi_rect.right()}, {self.roi_rect.bottom()})")
+            # print(f"ROI 坐标: 左上角 ({self.roi_rect.left()}, {self.roi_rect.top()}), "
+            #       f"右下角 ({self.roi_rect.right()}, {self.roi_rect.bottom()})")
 
     def saveROI(self):
-        if self.roi_rect and self.original_image is not None:
+        if self.roi_rect and self.display_image is not None:  # 改为检查display_image
             x1, y1 = self.roi_rect.left(), self.roi_rect.top()
             x2, y2 = self.roi_rect.right(), self.roi_rect.bottom()
-            roi = self.original_image[y1:y2, x1:x2]
+            roi = self.display_image[y1:y2, x1:x2]  # 从display_image获取处理后的ROI
             if roi.size > 0:
-                cv2.imwrite("roi_result.jpg", roi)
+                # 注意颜色格式：若display_image是RGB格式需转回BGR保存
+                roi_bgr = cv2.cvtColor(roi, cv2.COLOR_RGB2BGR)  # 按需添加转换
+                cv2.imwrite("roi_result.jpg", roi_bgr)
                 print(f"ROI 已保存为 roi_result.jpg，坐标: ({x1},{y1}) - ({x2},{y2})")
             else:
                 print("错误：选择的区域无效")
@@ -279,6 +356,7 @@ class ImageViewer(QWidget):
             x2, y2 = self.roi_rect.right(), self.roi_rect.bottom()
             # 始终从原始图像提取ROI
             roi = self.original_image[y1:y2, x1:x2]
+
             if roi.size > 0:
                 channel = self.channel_combo.currentText().lower()[0]  # 'r', 'g', 'b'
                 processed_roi = process_roi(roi, channel)
