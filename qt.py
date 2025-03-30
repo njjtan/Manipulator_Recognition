@@ -7,19 +7,21 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QLabel, QPushButton,
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen
 from PyQt5.QtCore import Qt, QPoint, QRect
 
-def process_roi(roi_image, channel='r'):
+def process_roi(roi_image, channel='r', threshold_type=None, low_thresh=0, high_thresh=33, min_area=3000):
     """
-    处理 ROI 区域，提取指定通道并转为灰度图像
+    处理 ROI 区域：通道提取 + 可选的阈值处理 + 筛选
     参数:
-        roi_image: ROI 区域的图像 (numpy 数组)
-        channel: 通道选择，'r'、'g' 或 'b'
+        roi_image: ROI 区域图像 (numpy 数组)
+        channel: 通道选择 ('r', 'g', 'b')
+        threshold_type: 二值化类型 ('auto' 或 'manual'，None 表示只提取通道)
+        low_thresh: 低阈值 (0-100)
+        high_thresh: 高阈值 (0-100)
+        min_area: 最小面积筛选
     返回:
         processed_image: 处理后的图像 (numpy 数组)
     """
-    # 分离通道
+    # 分离通道并转为灰度
     b, g, r = cv2.split(roi_image)
-
-    # 根据选择的通道返回灰度图像
     if channel == 'r':
         gray = r
     elif channel == 'g':
@@ -27,21 +29,63 @@ def process_roi(roi_image, channel='r'):
     elif channel == 'b':
         gray = b
     else:
-        gray = r  # 默认红色通道
+        gray = r
 
-    # 将单通道灰度图转回三通道，以便后续显示
-    processed_image = cv2.merge([gray, gray, gray])
+    # 如果 threshold_type 为 None，只返回通道提取结果
+    if threshold_type is None:
+        processed_image = cv2.merge([gray, gray, gray])  # 转回三通道显示
+        return processed_image
+
+    # 二值化处理
+    if threshold_type == 'auto':
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    else:  # manual
+        _, binary = cv2.threshold(gray, low_thresh, high_thresh * 2.55, cv2.THRESH_BINARY)  # 0-100 转 0-255
+
+    # 找到轮廓
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    processed_image = roi_image.copy()
+
+    # 标记和画矩形
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area >= min_area:
+            cv2.drawContours(processed_image, [contour], -1, (0, 255, 0), thickness=2)
+            x, y, w, h = cv2.boundingRect(contour)
+            cv2.rectangle(processed_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
     return processed_image
+def applyThreshold(self):
+    if self.roi_rect and self.original_image is not None:
+        x1, y1 = self.roi_rect.left(), self.roi_rect.top()
+        x2, y2 = self.roi_rect.right(), self.roi_rect.bottom()
+        roi = self.original_image[y1:y2, x1:x2]
+        if roi.size > 0:
+            channel = self.channel_combo.currentText().lower()[0]
+            # 在当前图像上应用阈值处理
+            processed_roi = process_roi(roi, channel, self.threshold_type,
+                                        self.low_thresh, self.high_thresh, self.min_area)
+            new_image = self.original_image.copy()
+            new_image[y1:y2, x1:x2] = processed_roi
+            self.original_image = new_image
+            self.updateDisplay()
+        else:
+            print("错误：选择的区域无效")
 class ImageViewer(QWidget):
     def __init__(self):
         super().__init__()
         self.original_image = None
+        self.pristine_image = None  # 保存未处理的原始图像
         self.display_image = None
         self.roi_rect = None
         self.resizing = False
         self.moving = False
         self.resize_handle = None
         self.channel_combo = None #下拉菜单
+        self.threshold_type = 'auto'  # 默认自动二值化
+        self.low_thresh = 0
+        self.high_thresh = 33
+        self.min_area = 3000
         self.initUI()
 
     def initUI(self):
@@ -72,6 +116,10 @@ class ImageViewer(QWidget):
         btn_layout.addWidget(btn_process)
         btn_layout.addWidget(self.channel_combo)
 
+        btn_params = QPushButton("参数设置", self)
+        btn_params.clicked.connect(self.showParamsDialog)
+        btn_layout.addWidget(btn_params)
+
 
         main_layout = QVBoxLayout()
         main_layout.addLayout(btn_layout)
@@ -86,29 +134,66 @@ class ImageViewer(QWidget):
             self, "选择图片", "", "Image Files (*.png *.jpg *.jpeg)")
         if filename:
             self.original_image = cv2.imread(filename)
-            self.display_image = self.original_image.copy()  # 显示用的可修改副本
             if self.original_image is not None:
+                self.pristine_image = self.original_image.copy()  # 保存原始副本
                 self.roi_rect = None
                 self.updateDisplay()
 
+    def showParamsDialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("参数设置")
+        layout = QVBoxLayout()
+
+        auto_radio = QRadioButton("自动二值化", dialog)
+        manual_radio = QRadioButton("手动二值化", dialog)
+        auto_radio.setChecked(True if self.threshold_type == 'auto' else False)
+        manual_radio.setChecked(True if self.threshold_type == 'manual' else False)
+        auto_radio.toggled.connect(lambda: self.setThresholdType('auto'))
+        manual_radio.toggled.connect(lambda: self.setThresholdType('manual'))
+        layout.addWidget(auto_radio)
+        layout.addWidget(manual_radio)
+
+        low_slider = QSlider(Qt.Horizontal, dialog)
+        low_slider.setRange(0, 100)
+        low_slider.setValue(self.low_thresh)
+        low_slider.valueChanged.connect(self.setLowThresh)
+        layout.addWidget(QLabel("低阈值:"))
+        layout.addWidget(low_slider)
+
+        high_slider = QSlider(Qt.Horizontal, dialog)
+        high_slider.setRange(0, 100)
+        high_slider.setValue(self.high_thresh)
+        high_slider.valueChanged.connect(self.setHighThresh)
+        layout.addWidget(QLabel("高阈值:"))
+        layout.addWidget(high_slider)
+
+        area_input = QLineEdit(str(self.min_area), dialog)
+        area_input.textChanged.connect(self.setMinArea)
+        layout.addWidget(QLabel("最小面积:"))
+        layout.addWidget(area_input)
+
+        ok_btn = QPushButton("确定", dialog)
+        ok_btn.clicked.connect(lambda: [dialog.accept(), self.applyThreshold()])  # 调用阈值处理
+        layout.addWidget(ok_btn)
+
+        dialog.setLayout(layout)
+        dialog.exec_()
 
     def updateDisplay(self):
-        # 改用display_image而非original_image作为显示源
-        h, w, ch = self.display_image.shape  # 注意这里改为display_image
+        if self.original_image is None:
+            return
+        h, w, ch = self.original_image.shape  # 用 original_image
         bytes_per_line = ch * w
-        # OpenCV默认是BGR格式，需转RGB
-        image_rgb = cv2.cvtColor(self.display_image, cv2.COLOR_BGR2RGB)  # 修改点
+        image_rgb = cv2.cvtColor(self.original_image, cv2.COLOR_BGR2RGB)  # 从 original_image 转换
         q_img = QImage(image_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
-        pixmap = QPixmap.fromImage(q_img)
-
-        # 绘制ROI选框（如果有）
+        self.display_image = QPixmap.fromImage(q_img)  # 生成 QPixmap
+        pixmap = self.display_image.copy()
         if self.roi_rect:
-            self.drawROI(pixmap)  # 直接在pixmap上绘制选框
-
-        # 缩放并显示
+            self.drawROI(pixmap)  # 绘制 ROI 框
         scaled_pixmap = pixmap.scaled(
             self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.image_label.setPixmap(scaled_pixmap)
+        self.image_label.update()  # 确保刷新
 
     def createROI(self):
         if self.original_image is not None:
@@ -287,33 +372,28 @@ class ImageViewer(QWidget):
             #       f"右下角 ({self.roi_rect.right()}, {self.roi_rect.bottom()})")
 
     def saveROI(self):
-        if self.roi_rect and self.display_image is not None:  # 改为检查display_image
+        if self.roi_rect and self.original_image is not None:
             x1, y1 = self.roi_rect.left(), self.roi_rect.top()
             x2, y2 = self.roi_rect.right(), self.roi_rect.bottom()
-            roi = self.display_image[y1:y2, x1:x2]  # 从display_image获取处理后的ROI
+            roi = self.original_image[y1:y2, x1:x2]
             if roi.size > 0:
-                # 注意颜色格式：若display_image是RGB格式需转回BGR保存
-                roi_bgr = cv2.cvtColor(roi, cv2.COLOR_RGB2BGR)  # 按需添加转换
-                cv2.imwrite("roi_result.jpg", roi_bgr)
+                cv2.imwrite("roi_result.jpg", roi)
                 print(f"ROI 已保存为 roi_result.jpg，坐标: ({x1},{y1}) - ({x2},{y2})")
             else:
                 print("错误：选择的区域无效")
 
     def processROI(self):
-        if self.roi_rect and self.original_image is not None:
+        if self.roi_rect and self.pristine_image is not None:
             x1, y1 = self.roi_rect.left(), self.roi_rect.top()
             x2, y2 = self.roi_rect.right(), self.roi_rect.bottom()
-            # 始终从原始图像提取ROI
-            roi = self.original_image[y1:y2, x1:x2]
-
+            roi = self.pristine_image[y1:y2, x1:x2]  # 从原始图像取 ROI
             if roi.size > 0:
-                channel = self.channel_combo.currentText().lower()[0]  # 'r', 'g', 'b'
-                processed_roi = process_roi(roi, channel)
-                # 创建新图像基于当前显示图像，替换ROI区域
-                new_image = self.display_image.copy()  # 使用显示图像作为基础
+                channel = self.channel_combo.currentText().lower()[0]
+                processed_roi = process_roi(roi, channel, threshold_type=None)
+                new_image = self.pristine_image.copy()  # 从原始图像复制
                 new_image[y1:y2, x1:x2] = processed_roi
-                self.display_image = new_image  # 更新显示图像
-                self.updateDisplay()  # 确保这里显示的是display_image
+                self.original_image = new_image  # 更新当前图像
+                self.updateDisplay()
             else:
                 print("错误：选择的区域无效")
 
