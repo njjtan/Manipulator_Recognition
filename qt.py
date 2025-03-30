@@ -27,7 +27,7 @@ def process_roi(roi_image, channel='r', threshold_type=None, low_thresh=0, high_
 
         # 修改阈值处理逻辑
     if threshold_type == 'auto':
-        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        _, binary = cv2.threshold(gray, 0, 33, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     else:
         # 使用inRange替代threshold实现区间阈值
         binary = cv2.inRange(gray, low_thresh, high_thresh)
@@ -162,6 +162,10 @@ class ImageViewer(QWidget):
                 self.roi_rect = None
                 self.updateDisplay()
 
+    def resizeEvent(self, event):
+        self.updateDisplay()  # 窗口大小变化时刷新图像
+        super().resizeEvent(event)  # 调用父类的 resizeEvent
+
     def showParamsDialog(self):
         dialog = QDialog(self)
         dialog.setWindowTitle("参数设置")
@@ -172,10 +176,6 @@ class ImageViewer(QWidget):
         manual_radio = QRadioButton("手动二值化", dialog)
         auto_radio.setChecked(self.threshold_type == 'auto')
         manual_radio.setChecked(self.threshold_type == 'manual')
-        auto_radio.toggled.connect(lambda checked: self.setThresholdType('auto') if checked else None)
-        manual_radio.toggled.connect(lambda checked: self.setThresholdType('manual') if checked else None)
-        layout.addWidget(auto_radio)
-        layout.addWidget(manual_radio)
 
         # 低阈值滑条 + 动态标签
         low_layout = QHBoxLayout()
@@ -183,8 +183,8 @@ class ImageViewer(QWidget):
         low_slider = QSlider(Qt.Horizontal, dialog)
         low_slider.setRange(0, 255)
         low_slider.setValue(self.low_thresh)
-        low_value_label = QLabel(f"{self.low_thresh}", dialog)  # 初始值
-        low_value_label.setFixedWidth(30)  # 固定宽度，避免跳动
+        low_value_label = QLabel(f"{self.low_thresh}", dialog)
+        low_value_label.setFixedWidth(30)
         low_slider.valueChanged.connect(lambda value: [self.setLowThresh(value), low_value_label.setText(f"{value}")])
         low_layout.addWidget(low_label)
         low_layout.addWidget(low_slider)
@@ -197,8 +197,8 @@ class ImageViewer(QWidget):
         high_slider = QSlider(Qt.Horizontal, dialog)
         high_slider.setRange(0, 255)
         high_slider.setValue(self.high_thresh)
-        high_value_label = QLabel(f"{self.high_thresh}", dialog)  # 初始值
-        high_value_label.setFixedWidth(30)  # 固定宽度，避免跳动
+        high_value_label = QLabel(f"{self.high_thresh}", dialog)
+        high_value_label.setFixedWidth(30)
         high_slider.valueChanged.connect(
             lambda value: [self.setHighThresh(value), high_value_label.setText(f"{value}")])
         high_layout.addWidget(high_label)
@@ -210,31 +210,53 @@ class ImageViewer(QWidget):
         area_layout = QHBoxLayout()
         area_label = QLabel("最小面积:", dialog)
         area_input = QLineEdit(str(self.min_area), dialog)
-        area_input.textChanged.connect(self.setMinArea)  # 实时更新
+        area_input.textChanged.connect(self.setMinArea)
         area_layout.addWidget(area_label)
         area_layout.addWidget(area_input)
         layout.addLayout(area_layout)
 
+        # 根据初始状态设置滑条启用/禁用
+        low_slider.setEnabled(self.threshold_type == 'manual')
+        high_slider.setEnabled(self.threshold_type == 'manual')
+
+        # 单选按钮切换逻辑
+        auto_radio.toggled.connect(
+            lambda checked: self.onThresholdTypeChanged(checked, 'auto', low_slider, high_slider))
+        manual_radio.toggled.connect(
+            lambda checked: self.onThresholdTypeChanged(checked, 'manual', low_slider, high_slider))
+
+        layout.addWidget(auto_radio)
+        layout.addWidget(manual_radio)
+
         # 确定按钮
         ok_btn = QPushButton("确定", dialog)
-        ok_btn.clicked.connect(lambda: [self.applyThreshold(), dialog.accept()])  # 先应用再关闭
+        ok_btn.clicked.connect(lambda: [self.applyThreshold(), dialog.accept()])
         layout.addWidget(ok_btn)
 
         dialog.setLayout(layout)
         dialog.exec_()
 
+    def onThresholdTypeChanged(self, checked, threshold_type, low_slider, high_slider):
+        if checked:
+            self.threshold_type = threshold_type
+            if threshold_type == 'auto':
+                low_slider.setEnabled(False)  # 禁用滑条
+                high_slider.setEnabled(False)
+            else:  # manual
+                low_slider.setEnabled(True)  # 启用滑条
+                high_slider.setEnabled(True)
+            self.applyThreshold()  # 切换时立即应用
+
     def setLowThresh(self, value):
         self.low_thresh = min(int(value), 255)
         if self.low_thresh > self.high_thresh:
             self.low_thresh = self.high_thresh
-        # print(f"设置低阈值: {self.low_thresh}")  # 去掉终端输出，靠界面显示
         self.applyThreshold()  # 实时应用
 
     def setHighThresh(self, value):
         self.high_thresh = min(int(value), 255)
         if self.high_thresh < self.low_thresh:
             self.high_thresh = self.low_thresh
-        # print(f"设置高阈值: {self.high_thresh}")  # 去掉终端输出，靠界面显示
         self.applyThreshold()  # 实时应用
 
     def onAutoToggled(self, checked):
