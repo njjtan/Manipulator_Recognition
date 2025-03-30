@@ -8,19 +8,6 @@ from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen
 from PyQt5.QtCore import Qt, QPoint, QRect
 
 def process_roi(roi_image, channel='r', threshold_type=None, low_thresh=0, high_thresh=33, min_area=3000):
-    """
-    处理 ROI 区域：通道提取 + 可选的阈值处理 + 筛选
-    参数:
-        roi_image: ROI 区域图像 (numpy 数组)
-        channel: 通道选择 ('r', 'g', 'b')
-        threshold_type: 二值化类型 ('auto' 或 'manual'，None 表示只提取通道)
-        low_thresh: 低阈值 (0-100)
-        high_thresh: 高阈值 (0-100)
-        min_area: 最小面积筛选
-    返回:
-        processed_image: 处理后的图像 (numpy 数组)
-    """
-    # 分离通道并转为灰度
     b, g, r = cv2.split(roi_image)
     if channel == 'r':
         gray = r
@@ -31,61 +18,44 @@ def process_roi(roi_image, channel='r', threshold_type=None, low_thresh=0, high_
     else:
         gray = r
 
-    # 如果 threshold_type 为 None，只返回通道提取结果
     if threshold_type is None:
-        processed_image = cv2.merge([gray, gray, gray])  # 转回三通道显示
+        processed_image = cv2.merge([gray, gray, gray])
         return processed_image
 
-    # 二值化处理
     if threshold_type == 'auto':
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    else:  # manual
-        _, binary = cv2.threshold(gray, low_thresh, high_thresh * 2.55, cv2.THRESH_BINARY)  # 0-100 转 0-255
+    else:
+        # 手动二值化：只标记像素值在 low_thresh 到 high_thresh 之间的区域
+        _, binary = cv2.threshold(gray, low_thresh, high_thresh, cv2.THRESH_BINARY)
+        print(f"手动二值化: 低 {low_thresh}, 高 {high_thresh}")
 
-    # 找到轮廓
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     processed_image = roi_image.copy()
 
-    # 标记和画矩形
     for contour in contours:
         area = cv2.contourArea(contour)
         if area >= min_area:
-            cv2.drawContours(processed_image, [contour], -1, (0, 255, 0), thickness=2)
+            cv2.drawContours(processed_image, [contour], -1, (0, 255, 0), thickness=2)  # 绿点标记
             x, y, w, h = cv2.boundingRect(contour)
-            cv2.rectangle(processed_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.rectangle(processed_image, (x, y), (x + w, y + h), (0, 255, 0), 2)  # 外接矩形
 
     return processed_image
-def applyThreshold(self):
-    if self.roi_rect and self.original_image is not None:
-        x1, y1 = self.roi_rect.left(), self.roi_rect.top()
-        x2, y2 = self.roi_rect.right(), self.roi_rect.bottom()
-        roi = self.original_image[y1:y2, x1:x2]
-        if roi.size > 0:
-            channel = self.channel_combo.currentText().lower()[0]
-            # 在当前图像上应用阈值处理
-            processed_roi = process_roi(roi, channel, self.threshold_type,
-                                        self.low_thresh, self.high_thresh, self.min_area)
-            new_image = self.original_image.copy()
-            new_image[y1:y2, x1:x2] = processed_roi
-            self.original_image = new_image
-            self.updateDisplay()
-        else:
-            print("错误：选择的区域无效")
+
 class ImageViewer(QWidget):
     def __init__(self):
         super().__init__()
         self.original_image = None
-        self.pristine_image = None  # 保存未处理的原始图像
+        self.pristine_image = None
         self.display_image = None
         self.roi_rect = None
         self.resizing = False
         self.moving = False
         self.resize_handle = None
-        self.channel_combo = None #下拉菜单
-        self.threshold_type = 'auto'  # 默认自动二值化
+        self.threshold_type = 'auto'
         self.low_thresh = 0
         self.high_thresh = 33
         self.min_area = 3000
+        self.channel_combo = None
         self.initUI()
 
     def initUI(self):
@@ -129,6 +99,44 @@ class ImageViewer(QWidget):
         self.setWindowTitle('PyQt5')
         self.show()
 
+    def setThresholdType(self, type):
+        self.threshold_type = type
+        print(f"设置阈值类型: {type}")
+
+    def setLowThresh(self, value):
+        self.low_thresh = value
+        print(f"设置低阈值: {value}")
+
+    def setHighThresh(self, value):
+        self.high_thresh = value
+        print(f"设置高阈值: {value}")
+
+    def setMinArea(self, text):
+        try:
+            self.min_area = int(text)
+            print(f"设置最小面积: {self.min_area}")
+        except ValueError:
+            self.min_area = 3000
+            print("面积输入无效，使用默认值 3000")
+
+    def applyThreshold(self):
+        if self.roi_rect and self.original_image is not None:
+            print("开始应用阈值...")
+            x1, y1 = self.roi_rect.left(), self.roi_rect.top()
+            x2, y2 = self.roi_rect.right(), self.roi_rect.bottom()
+            roi = self.original_image[y1:y2, x1:x2]
+            if roi.size > 0:
+                channel = self.channel_combo.currentText().lower()[0]
+                processed_roi = process_roi(roi, channel, self.threshold_type,
+                                            self.low_thresh, self.high_thresh, self.min_area)
+                new_image = self.original_image.copy()
+                new_image[y1:y2, x1:x2] = processed_roi
+                self.original_image = new_image
+                self.updateDisplay()
+                print("阈值应用完成")
+            else:
+                print("错误：选择的区域无效")
+
     def loadImage(self):
         filename, _ = QFileDialog.getOpenFileName(
             self, "选择图片", "", "Image Files (*.png *.jpg *.jpeg)")
@@ -146,22 +154,22 @@ class ImageViewer(QWidget):
 
         auto_radio = QRadioButton("自动二值化", dialog)
         manual_radio = QRadioButton("手动二值化", dialog)
-        auto_radio.setChecked(True if self.threshold_type == 'auto' else False)
-        manual_radio.setChecked(True if self.threshold_type == 'manual' else False)
-        auto_radio.toggled.connect(lambda: self.setThresholdType('auto'))
-        manual_radio.toggled.connect(lambda: self.setThresholdType('manual'))
+        auto_radio.setChecked(self.threshold_type == 'auto')
+        manual_radio.setChecked(self.threshold_type == 'manual')
+        auto_radio.toggled.connect(lambda checked: self.setThresholdType('auto') if checked else None)
+        manual_radio.toggled.connect(lambda checked: self.setThresholdType('manual') if checked else None)
         layout.addWidget(auto_radio)
         layout.addWidget(manual_radio)
 
         low_slider = QSlider(Qt.Horizontal, dialog)
-        low_slider.setRange(0, 100)
+        low_slider.setRange(0, 100)  # 保持 0-100，但后面映射到 0-255
         low_slider.setValue(self.low_thresh)
         low_slider.valueChanged.connect(self.setLowThresh)
         layout.addWidget(QLabel("低阈值:"))
         layout.addWidget(low_slider)
 
         high_slider = QSlider(Qt.Horizontal, dialog)
-        high_slider.setRange(0, 100)
+        high_slider.setRange(0, 300)  # 示例要 0-300
         high_slider.setValue(self.high_thresh)
         high_slider.valueChanged.connect(self.setHighThresh)
         layout.addWidget(QLabel("高阈值:"))
@@ -173,11 +181,24 @@ class ImageViewer(QWidget):
         layout.addWidget(area_input)
 
         ok_btn = QPushButton("确定", dialog)
-        ok_btn.clicked.connect(lambda: [dialog.accept(), self.applyThreshold()])  # 调用阈值处理
+        ok_btn.clicked.connect(lambda checked: [dialog.accept(), self.applyThreshold()])
         layout.addWidget(ok_btn)
 
         dialog.setLayout(layout)
+        print("对话框初始化完成")
         dialog.exec_()
+
+    def onAutoToggled(self, checked):
+        if checked:
+            self.setThresholdType('auto')
+
+    def onManualToggled(self, checked):
+        if checked:
+            self.setThresholdType('manual')
+
+    def onDialogAccept(self, dialog):
+        dialog.accept()
+        self.applyThreshold()
 
     def updateDisplay(self):
         if self.original_image is None:
