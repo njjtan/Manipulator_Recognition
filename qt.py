@@ -32,57 +32,6 @@ def process_roi(roi_image, channel='r'):
     # 将单通道灰度图转回三通道，以便后续显示
     processed_image = cv2.merge([gray, gray, gray])
     return processed_image
-
-class ThresholdDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("阈值处理设置")
-
-        layout = QVBoxLayout()
-
-        # 二值化方式选择
-        self.auto_radio = QRadioButton("自动二值化(Otsu)")
-        self.manual_radio = QRadioButton("手动二值化")
-        self.manual_radio.setChecked(True)
-        layout.addWidget(QLabel("选择二值化方式:"))
-        layout.addWidget(self.auto_radio)
-        layout.addWidget(self.manual_radio)
-
-        # 手动阈值滑动条
-        self.threshold_layout = QVBoxLayout()
-        self.low_slider = QSlider(Qt.Horizontal)
-        self.low_slider.setRange(0, 100)
-        self.high_slider = QSlider(Qt.Horizontal)
-        self.high_slider.setRange(0, 100)
-        self.high_slider.setValue(100)
-        self.threshold_layout.addWidget(QLabel("低阈值 (0-100):"))
-        self.threshold_layout.addWidget(self.low_slider)
-        self.threshold_layout.addWidget(QLabel("高阈值 (0-100):"))
-        self.threshold_layout.addWidget(self.high_slider)
-        layout.addLayout(self.threshold_layout)
-
-        # 自动阈值时隐藏滑动条
-        self.auto_radio.toggled.connect(lambda: self.threshold_layout.setVisible(not self.auto_radio.isChecked()))
-
-        # 面积筛选输入
-        layout.addWidget(QLabel("面积筛选阈值:"))
-        self.area_input = QLineEdit("3000")
-        layout.addWidget(self.area_input)
-
-        # 确定按钮
-        self.ok_btn = QPushButton("确定")
-        self.ok_btn.clicked.connect(self.accept)
-        layout.addWidget(self.ok_btn)
-
-        self.setLayout(layout)
-
-    def get_params(self):
-        return {
-            "is_auto": self.auto_radio.isChecked(),
-            "low_thresh": self.low_slider.value(),
-            "high_thresh": self.high_slider.value(),
-            "min_area": int(self.area_input.text())
-        }
 class ImageViewer(QWidget):
     def __init__(self):
         super().__init__()
