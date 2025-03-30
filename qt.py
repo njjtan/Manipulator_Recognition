@@ -8,8 +8,7 @@ from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen
 from PyQt5.QtCore import Qt, QPoint, QRect, QTimer
 
 
-def process_roi(roi_image, channel='r', threshold_type=None, low_thresh=0, high_thresh=33, min_area=3000):
-    # 添加阈值有效性检查
+def process_roi(roi_image, channel='r', threshold_type=None, low_thresh=0, high_thresh=33, min_area=3000, offset=(0, 0)):
     if low_thresh > high_thresh:
         low_thresh, high_thresh = high_thresh, low_thresh
     b, g, r = cv2.split(roi_image)
@@ -23,26 +22,33 @@ def process_roi(roi_image, channel='r', threshold_type=None, low_thresh=0, high_
         gray = r
     if threshold_type is None:
         processed_image = cv2.merge([gray, gray, gray])
-        return processed_image
+        return processed_image, []
 
-        # 修改阈值处理逻辑
     if threshold_type == 'auto':
-        _, binary = cv2.threshold(gray, 0, 33, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     else:
-        # 使用inRange替代threshold实现区间阈值
         binary = cv2.inRange(gray, low_thresh, high_thresh)
 
-        # 优化连通区域分析
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     processed_image = roi_image.copy()
+    rect_info = []
+    x_offset, y_offset = offset  # ROI 偏移量
 
-    for contour in contours:
+    for idx, contour in enumerate(contours, 1):  # 从 1 开始编号
         area = cv2.contourArea(contour)
         if area >= min_area:
-            # 绘制旋转矩形（红色）
             rect = cv2.minAreaRect(contour)
             box = cv2.boxPoints(rect)
             box = np.intp(box)
+
+            # 计算中心点和方向
+            center = rect[0]  # (center_x, center_y)
+            # 加上 ROI 偏移量，转换为全局坐标
+            center = (center[0] + x_offset, center[1] + y_offset)
+            angle = rect[2]
+            rect_info.append((idx, center, angle))
+
+            # 绘制矩形（红色）
             cv2.drawContours(processed_image, [box], 0, (0, 0, 255), 2)
 
             # 填充区域（绿色）
@@ -50,7 +56,15 @@ def process_roi(roi_image, channel='r', threshold_type=None, low_thresh=0, high_
             cv2.drawContours(mask, [contour], -1, 255, -1)
             processed_image[mask == 255] = [0, 255, 0]
 
-    return processed_image
+            # 在矩形中心绘制编号（红色字体）
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            text = str(idx)
+            text_size = cv2.getTextSize(text, font, 1, 2)[0]
+            text_x = int(center[0] - x_offset - text_size[0] / 2)  # 局部坐标
+            text_y = int(center[1] - y_offset + text_size[1] / 2)
+            cv2.putText(processed_image, text, (text_x, text_y), font, 1, (255, 0, 0), 2)
+
+    return processed_image, rect_info
 
 class ImageViewer(QWidget):
     def __init__(self):
@@ -67,14 +81,21 @@ class ImageViewer(QWidget):
         self.high_thresh = 33
         self.min_area = 3000
         self.channel_combo = None
+        self.low_slider = None
+        self.high_slider = None
+        self.low_value_label = None
+        self.high_value_label = None
+        self.area_input = None
+        self.rect_info = []  # 初始化矩形信息列表
         self.initUI()
 
     def initUI(self):
+        # 图像标签
         self.image_label = QLabel(self)
         self.image_label.setAlignment(Qt.AlignCenter)
-        # 去掉 setMinimumSize(640, 480)，让它自由伸缩
-        self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)  # 允许扩展
+        self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
+        # 按钮区域
         btn_load = QPushButton("加载图片", self)
         btn_load.clicked.connect(self.loadImage)
 
@@ -98,12 +119,29 @@ class ImageViewer(QWidget):
         btn_layout.addWidget(self.channel_combo)
 
         btn_params = QPushButton("参数设置", self)
-        btn_params.clicked.connect(self.showParamsDialog)
+        btn_params.clicked.connect(self.showParamsPanel)  # 修改为显示侧边栏
         btn_layout.addWidget(btn_params)
 
-        main_layout = QVBoxLayout()
-        main_layout.addLayout(btn_layout)
-        main_layout.addWidget(self.image_label, stretch=1)  # stretch=1 让图像区域占满剩余空间
+        # 图像区域布局
+        image_layout = QVBoxLayout()
+        image_layout.addLayout(btn_layout)
+        image_layout.addWidget(self.image_label, stretch=1)
+
+        # 图像区域容器
+        self.image_widget = QWidget()
+        self.image_widget.setLayout(image_layout)
+
+        # 参数设置面板（侧边栏）
+        self.params_panel = QWidget()
+        self.params_layout = QVBoxLayout()
+        self.setupParamsPanel()  # 初始化参数面板
+        self.params_panel.setLayout(self.params_layout)
+        self.params_panel.hide()  # 默认隐藏
+
+        # 主布局：左侧图像，右侧参数面板
+        main_layout = QHBoxLayout()
+        main_layout.addWidget(self.image_widget, stretch=3)  # 图像占 3/4
+        main_layout.addWidget(self.params_panel, stretch=1)  # 面板占 1/4
         self.setLayout(main_layout)
 
         self.setWindowTitle('PyQt5')
@@ -115,6 +153,71 @@ class ImageViewer(QWidget):
             self.applyThreshold()
             self.updateDisplay()
 
+    def setupParamsPanel(self):
+        #添加 setupParamsPanel 方法，初始化参数面板
+        # 单选按钮：自动/手动二值化
+        auto_radio = QRadioButton("自动二值化")
+        manual_radio = QRadioButton("手动二值化")
+        auto_radio.setChecked(self.threshold_type == 'auto')
+        manual_radio.setChecked(self.threshold_type == 'manual')
+
+        # 低阈值滑条 + 动态标签
+        low_layout = QHBoxLayout()
+        low_label = QLabel("低阈值:")
+        self.low_slider = QSlider(Qt.Horizontal)
+        self.low_slider.setRange(0, 255)
+        self.low_slider.setValue(self.low_thresh)
+        self.low_value_label = QLabel(f"{self.low_thresh}")
+        self.low_value_label.setFixedWidth(30)
+        self.low_slider.valueChanged.connect(
+            lambda value: [self.setLowThresh(value), self.low_value_label.setText(f"{value}")])
+        low_layout.addWidget(low_label)
+        low_layout.addWidget(self.low_slider)
+        low_layout.addWidget(self.low_value_label)
+
+        # 高阈值滑条 + 动态标签
+        high_layout = QHBoxLayout()
+        high_label = QLabel("高阈值:")
+        self.high_slider = QSlider(Qt.Horizontal)
+        self.high_slider.setRange(0, 255)
+        self.high_slider.setValue(self.high_thresh)
+        self.high_value_label = QLabel(f"{self.high_thresh}")
+        self.high_value_label.setFixedWidth(30)
+        self.high_slider.valueChanged.connect(
+            lambda value: [self.setHighThresh(value), self.high_value_label.setText(f"{value}")])
+        high_layout.addWidget(high_label)
+        high_layout.addWidget(self.high_slider)
+        high_layout.addWidget(self.high_value_label)
+
+        # 最小面积输入框
+        area_layout = QHBoxLayout()
+        area_label = QLabel("最小面积:")
+        self.area_input = QLineEdit(str(self.min_area))
+        self.area_input.textChanged.connect(self.setMinArea)
+        area_layout.addWidget(area_label)
+        area_layout.addWidget(self.area_input)
+
+        # 根据初始状态设置滑条启用/禁用
+        self.low_slider.setEnabled(self.threshold_type == 'manual')
+        self.high_slider.setEnabled(self.threshold_type == 'manual')
+
+        # 单选按钮切换逻辑
+        auto_radio.toggled.connect(lambda checked: self.onThresholdTypeChanged(checked, 'auto'))
+        manual_radio.toggled.connect(lambda checked: self.onThresholdTypeChanged(checked, 'manual'))
+
+        self.params_layout.addWidget(auto_radio)
+        self.params_layout.addWidget(manual_radio)
+        self.params_layout.addLayout(low_layout)
+        self.params_layout.addLayout(high_layout)
+        self.params_layout.addLayout(area_layout)
+
+        # 确定按钮
+        ok_btn = QPushButton("确定")
+        ok_btn.clicked.connect(self.hideParamsPanel)
+        self.params_layout.addWidget(ok_btn)
+
+        # 添加伸缩项，确保控件靠上
+        self.params_layout.addStretch()
     def setThresholdType(self, type):
         self.threshold_type = type
         print(f"设置阈值类型: {type}")
@@ -130,27 +233,27 @@ class ImageViewer(QWidget):
             QTimer.singleShot(500, self.applyThreshold)
 
     def applyThreshold(self):
+        self.rect_info = []  # 清空，确保编号从头开始
         if self.roi_rect and self.pristine_image is not None:
-            print("开始应用阈值...")
             x1, y1 = self.roi_rect.left(), self.roi_rect.top()
             x2, y2 = self.roi_rect.right(), self.roi_rect.bottom()
-            roi = self.pristine_image[y1:y2, x1:x2]  # 从原始图像取 ROI
+            roi = self.pristine_image[y1:y2, x1:x2]
             if roi.size > 0:
                 channel = self.channel_combo.currentText().lower()[0]
-                # 先提取通道（保持灰度）
-                gray_roi = process_roi(roi, channel, threshold_type=None)
-                # 再应用阈值处理
-                processed_roi = process_roi(gray_roi, channel, self.threshold_type,
-                                            self.low_thresh, self.high_thresh, self.min_area)
-                new_image = self.pristine_image.copy()  # 从原始图像复制
+                gray_roi, _ = process_roi(roi, channel, threshold_type=None, offset=(x1, y1))
+                processed_roi, self.rect_info = process_roi(gray_roi, channel, self.threshold_type,
+                                                            self.low_thresh, self.high_thresh, self.min_area,
+                                                            offset=(x1, y1))
+                new_image = self.pristine_image.copy()
                 new_image[y1:y2, x1:x2] = processed_roi
                 self.original_image = new_image
                 self.updateDisplay()
-                print("阈值应用完成")
             else:
                 print("错误：选择的区域无效")
+                self.rect_info = []
         else:
             print("无 ROI 或原始图像未加载")
+            self.rect_info = []
 
     def loadImage(self):
         filename, _ = QFileDialog.getOpenFileName(
@@ -236,16 +339,31 @@ class ImageViewer(QWidget):
         dialog.setLayout(layout)
         dialog.exec_()
 
-    def onThresholdTypeChanged(self, checked, threshold_type, low_slider, high_slider):
+    def onThresholdTypeChanged(self, checked, threshold_type):
         if checked:
             self.threshold_type = threshold_type
             if threshold_type == 'auto':
-                low_slider.setEnabled(False)  # 禁用滑条
-                high_slider.setEnabled(False)
-            else:  # manual
-                low_slider.setEnabled(True)  # 启用滑条
-                high_slider.setEnabled(True)
-            self.applyThreshold()  # 切换时立即应用
+                self.low_slider.setEnabled(False)#禁用滑条
+                self.high_slider.setEnabled(False)
+            else:
+                self.low_slider.setEnabled(True)
+                self.high_slider.setEnabled(True)
+            self.applyThreshold()
+
+    def showParamsPanel(self):
+        self.params_panel.show()
+        self.applyThreshold()  # 打开时刷新，确保显示最新状态
+
+    def hideParamsPanel(self):
+        self.params_panel.hide()
+        self.applyThreshold()
+        # 输出矩形信息
+        if self.rect_info:
+            print("最小外接矩形信息：")
+            for idx, center, angle in self.rect_info:
+                print(f"矩形 {idx}: 中心点 ({center[0]:.2f}, {center[1]:.2f}), 方向: {angle:.2f} 度")
+        else:
+            print("没有检测到最小外接矩形")
 
     def setLowThresh(self, value):
         self.low_thresh = min(int(value), 255)
@@ -478,20 +596,25 @@ class ImageViewer(QWidget):
                 print("错误：选择的区域无效")
 
     def processROI(self):
+        self.rect_info = []  # 清空，确保编号从头开始
         if self.roi_rect and self.pristine_image is not None:
             x1, y1 = self.roi_rect.left(), self.roi_rect.top()
             x2, y2 = self.roi_rect.right(), self.roi_rect.bottom()
-            roi = self.pristine_image[y1:y2, x1:x2]  # 从原始图像取 ROI
+            roi = self.pristine_image[y1:y2, x1:x2]
             if roi.size > 0:
                 channel = self.channel_combo.currentText().lower()[0]
-                processed_roi = process_roi(roi, channel, threshold_type=None)  # 只提取通道
-                new_image = self.pristine_image.copy()  # 从原始图像复制
-                new_image[y1:y2, x1:x2] = processed_roi  # ROI 区域变灰
-                self.original_image = new_image  # 更新为灰度效果
+                processed_roi, self.rect_info = process_roi(roi, channel, threshold_type=None, offset=(x1, y1))
+                new_image = self.pristine_image.copy()
+                new_image[y1:y2, x1:x2] = processed_roi
+                self.original_image = new_image
                 self.updateDisplay()
-                print("通道提取完成，ROI 区域已变灰")
+                # print("通道提取完成，ROI 区域已变灰")
             else:
                 print("错误：选择的区域无效")
+                self.rect_info = []
+        else:
+            print("无 ROI 或原始图像未加载")
+            self.rect_info = []
 
     def getROICoordinates(self):
         if self.roi_rect:
